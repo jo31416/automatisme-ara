@@ -1,0 +1,32 @@
+name: Descarrega i envia el Diari Ara
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # Cada dia a les 7:00 UTC (9:00 hora catalana)
+  workflow_dispatch:        # Permet executar-lo manualment també
+
+jobs:
+  descarrega-i-envia:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descarrega el codi
+        uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instal·la dependències
+        run: |
+          pip install playwright
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      - name: Executa l'script
+        env:
+          GMAIL_USUARI: ${{ secrets.GMAIL_USUARI }}
+          GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+          DESTINATARIS: ${{ secrets.DESTINATARIS }}
+        run: python descarrega_ara.py
