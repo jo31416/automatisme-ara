@@ -7,6 +7,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
+
+import nest_asyncio
+nest_asyncio.apply()
+
 from playwright.sync_api import sync_playwright
 
 # Les credencials vénen de les variables d'entorn (GitHub Secrets)
@@ -27,7 +31,6 @@ def descarrega_pdf():
         page.goto("https://www.ara.cat/hemeroteca/", wait_until="networkidle", timeout=60000)
         time.sleep(3)
 
-        # Busca l'enllaç de descàrrega del PDF
         selectors = [
             "a[href*='.pdf']",
             "a[href*='pdf']",
@@ -101,3 +104,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"✗ Error: {e}")
         raise
+
