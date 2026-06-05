@@ -2,8 +2,8 @@ name: Descarrega i envia el Diari Ara
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # Cada dia a les 7:00 UTC (9:00 hora catalana)
-  workflow_dispatch:        # Permet executar-lo manualment també
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
   descarrega-i-envia:
@@ -20,7 +20,7 @@ jobs:
 
       - name: Instal·la dependències
         run: |
-          pip install playwright
+          pip install playwright nest_asyncio
           python -m playwright install chromium
           python -m playwright install-deps chromium
 
