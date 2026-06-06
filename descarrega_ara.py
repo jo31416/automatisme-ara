@@ -20,8 +20,6 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 
 async def esta_loguejat(page):
-    """Retorna True si la sessió ja està iniciada."""
-    # Buscar icona d'usuari loguejat (lletra inicial) o absència del botó "INICIA SESSIÓ"
     html = await page.content()
     if "inicia-sessio" in html.lower() or "inicia sessió" in html.lower() or "Necessites ajuda per iniciar sessió" in html:
         return False
@@ -38,12 +36,11 @@ async def descarrega_pdf():
         )
         page = await context.new_page()
 
-        # 1. ANAR A L'HEMEROTECA I COMPROVAR SESSIÓ
+        # 1. COMPROVAR SESSIÓ
         print("Carregant hemeroteca...")
-        await page.goto("https://www.ara.cat/hemeroteca/", wait_until="networkidle", timeout=60000)
-        await asyncio.sleep(3)
+        await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(4)
 
-        # Acceptar cookies
         try:
             await page.click("button:has-text('Acceptar')", timeout=5000)
             await asyncio.sleep(1)
@@ -58,18 +55,17 @@ async def descarrega_pdf():
             print("Fent login...")
             await page.goto(
                 "https://www.ara.cat/usuari/login?backUrl=https%3A%2F%2Fwww.ara.cat%2Fhemeroteca%2F",
-                wait_until="networkidle", timeout=60000
+                wait_until="domcontentloaded", timeout=60000
             )
             await asyncio.sleep(3)
 
-            # Acceptar cookies si torna a aparèixer
             try:
                 await page.click("button:has-text('Acceptar')", timeout=4000)
                 await asyncio.sleep(1)
             except:
                 pass
 
-            # PAS 1: omplir correu i clicar el botó
+            # PAS 1: correu
             print("Omplint correu...")
             await page.wait_for_selector("input[type='email'], input[placeholder*='orreu']", timeout=15000)
             await page.fill("input[type='email'], input[placeholder*='orreu']", ARA_USUARI)
@@ -80,59 +76,72 @@ async def descarrega_pdf():
             await asyncio.sleep(4)
             print(f"URL pas 1: {page.url}")
 
-            # PAS 2: contrasenya
-            print("Omplint contrasenya...")
+            # PAS 2: contrasenya — diagnòstic de botons
+            print("Esperant camp de contrasenya...")
             await page.wait_for_selector("input[type='password']", timeout=15000)
             await page.fill("input[type='password']", ARA_PASSWORD)
             await asyncio.sleep(1)
 
-            # Submit
-            for selector in ["button[type='submit']", "button:has-text('ENTRA')", "button:has-text('CONTINUA')", "button:has-text('Accedeix')"]:
-                try:
-                    await page.click(selector, timeout=3000)
-                    print(f"Submit clicat: {selector}")
-                    break
-                except:
-                    pass
+            # Llistar tots els botons per saber quin clicar
+            buttons = await page.query_selector_all("button")
+            print(f"Botons trobats: {len(buttons)}")
+            for btn in buttons:
+                t = await btn.get_attribute("type") or ""
+                txt = (await btn.inner_text()).strip()
+                print(f"  button type='{t}' text='{txt}'")
 
-            await asyncio.sleep(5)
+            # Clicar el primer botó submit, o l'últim botó si no n'hi ha
+            clicked = False
+            for btn in buttons:
+                t = await btn.get_attribute("type") or ""
+                txt = (await btn.inner_text()).strip().upper()
+                if t == "submit" or any(x in txt for x in ["ENTRA", "ACCEDEIX", "CONTINUA", "LOGIN", "INICIAR"]):
+                    await btn.click()
+                    print(f"Clicat botó: '{txt}'")
+                    clicked = True
+                    break
+            if not clicked:
+                print("Cap botó submit trobat, fent Enter...")
+                await page.keyboard.press("Enter")
+
+            await asyncio.sleep(6)
             print(f"URL després login: {page.url}")
 
-            # Tornar a l'hemeroteca
-            await page.goto("https://www.ara.cat/hemeroteca/", wait_until="networkidle", timeout=60000)
+            # Verificar si el login ha anat bé
+            if "login" in page.url:
+                html = await page.content()
+                errors = re.findall(r'class="[^"]*error[^"]*"[^>]*>([^<]+)<', html)
+                print(f"Errors de login detectats: {errors}")
+                raise Exception("El login no ha funcionat, seguim a la pàgina de login.")
+
+            # Anar a l'hemeroteca
+            print("Anant a l'hemeroteca...")
+            await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(5)
 
-        # 3. BUSCAR EL PDF A L'HEMEROTECA
-        print(f"URL hemeroteca final: {page.url}")
+        # 3. BUSCAR EL PDF
+        print(f"URL hemeroteca: {page.url}")
         html = await page.content()
 
-        # Buscar URLs de PDF directament al HTML
         pdf_urls = re.findall(r'https?://[^\s"\'<>]*\.pdf[^\s"\'<>]*', html, re.IGNORECASE)
-        print(f"PDFs trobats al HTML: {pdf_urls}")
+        print(f"PDFs al HTML: {pdf_urls}")
 
         if pdf_urls:
             pdf_url = pdf_urls[0]
         else:
-            # Buscar l'enllaç de la imatge de portada que obre el PDF
-            # Segons la descripció de l'usuari, és una imatge clicable
-            print("Buscant imatge clicable de l'última edició...")
-
-            # Llistar tots els enllaços per diagnòstic
             links = await page.query_selector_all("a")
             print(f"Total enllaços: {len(links)}")
             for link in links:
                 href = await link.get_attribute("href") or ""
-                text = (await link.inner_text()).strip()[:80]
-                if href and href != "#" and "ara.cat" in href:
+                text = (await link.inner_text()).strip()[:60]
+                if href and href != "#":
                     print(f"  [{text[:40]}] -> {href}")
+            raise Exception("No s'ha trobat el PDF.")
 
-            raise Exception("No s'ha trobat el PDF. Revisa els logs per veure els enllaços disponibles.")
-
-        # 4. DESCARREGAR EL PDF
-        print(f"Descarregant PDF: {pdf_url}")
+        # 4. DESCARREGAR
+        print(f"Descarregant: {pdf_url}")
         import urllib.request
         fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{date.today()}.pdf")
-
         req = urllib.request.Request(pdf_url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req) as response:
             with open(fitxer_pdf, "wb") as f:
