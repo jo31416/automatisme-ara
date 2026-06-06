@@ -88,87 +88,104 @@ async def descarrega_pdf():
             if "login" in page.url:
                 raise Exception("El login no ha funcionat.")
 
-            print("Anant a l'hemeroteca...")
+        # 3. CRIDAR L'API D'HEMEROTECA PER OBTENIR L'ID DE LA PUBLICACIÓ
+        # Provem diverses APIs possibles
+        avui = date.today()
+        data_str = avui.strftime("%Y/%m/%d")
+        print(f"Buscant publicació del {data_str}...")
+
+        # API d'hemeroteca que llista les edicions
+        apis_a_provar = [
+            "https://www.ara.cat/api/front/archive/publications?limit=1",
+            "https://www.ara.cat/api/front/archive/publications",
+            f"https://www.ara.cat/api/front/archive/publications?date={avui.strftime('%Y-%m-%d')}",
+            "https://www.ara.cat/api/front/hemeroteca",
+            "https://www.ara.cat/api/front/hemeroteca?limit=1",
+        ]
+
+        pub_id = None
+        for api in apis_a_provar:
+            print(f"Provant: {api}")
+            resp = await page.evaluate(f"""
+                async () => {{
+                    try {{
+                        const r = await fetch('{api}', {{
+                            credentials: 'include',
+                            headers: {{'Accept': 'application/json'}}
+                        }});
+                        return {{ status: r.status, body: await r.text() }};
+                    }} catch(e) {{ return {{ error: e.toString() }} }}
+                }}
+            """)
+            print(f"  Status: {resp.get('status')} — Body: {str(resp.get('body',''))[:300]}")
+
+            body = resp.get('body', '')
+            # Buscar IDs numèrics associats a publicació
+            ids = re.findall(r'"id"\s*:\s*(\d+)', body)
+            pub_matches = re.findall(r'/publication/(\d+)', body)
+            if ids or pub_matches:
+                pub_id = (pub_matches or ids)[0]
+                print(f"  ID trobat: {pub_id}")
+                break
+
+        if not pub_id:
+            # Intentar capturar l'ID interceptant peticions mentre naveguem
+            print("\nInterceptant peticions a l'API mentre carreguem l'hemeroteca...")
+            ids_capturats = []
+
+            async def on_response(response):
+                url = response.url
+                if "/api/front/archive/publication" in url or "/api/front/hemeroteca" in url:
+                    print(f"  [API RESPONSE] {url}")
+                    try:
+                        body = await response.text()
+                        print(f"  Body: {body[:300]}")
+                        ids_capturats.append((url, body))
+                    except:
+                        pass
+
+            page.on("response", on_response)
             await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(15)
 
-        await asyncio.sleep(10)
+            for url, body in ids_capturats:
+                m = re.search(r'"id"\s*:\s*(\d+)', body)
+                pm = re.search(r'/publication/(\d+)', url)
+                if m or pm:
+                    pub_id = (pm.group(1) if pm else m.group(1))
+                    print(f"ID capturat: {pub_id}")
+                    break
 
-        # 3. INTERCEPTAR LA CRIDA A L'API DE PUBLICACIÓ
-        print("Buscant l'ID de la publicació al HTML...")
-        html = await page.content()
+        if not pub_id:
+            raise Exception("No s'ha pogut trobar l'ID de publicació per cap mètode.")
 
-        # Buscar IDs de publicació al HTML
-        pub_ids = re.findall(r'/api/front/archive/publication/(\d+)', html)
-        print(f"IDs de publicació trobats al HTML: {pub_ids}")
-
-        if not pub_ids:
-            # Interceptar la crida mentre es fa clic a la portada
-            print("No trobat al HTML, interceptant via clic...")
-            pub_ids_xarxa = []
-
-            async def on_request(request):
-                url = request.url
-                m = re.search(r'/api/front/archive/publication/(\d+)', url)
-                if m:
-                    print(f"  [API] {url}")
-                    pub_ids_xarxa.append(m.group(1))
-
-            page.on("request", on_request)
-
-            try:
-                await page.click("a:has(img[src*='clip'])", timeout=15000)
-                await asyncio.sleep(5)
-            except Exception as e:
-                print(f"Error clic: {e}")
-
-            pub_ids = pub_ids_xarxa
-
-        if not pub_ids:
-            raise Exception("No s'ha trobat l'ID de publicació.")
-
-        pub_id = pub_ids[0]
-        print(f"ID de publicació: {pub_id}")
-
-        # 4. CRIDAR L'API PER OBTENIR L'URL SIGNADA DEL PDF
-        api_url = f"https://www.ara.cat/api/front/archive/publication/{pub_id}"
-        print(f"Cridant API: {api_url}")
-
-        api_response = await page.evaluate(f"""
+        # 4. OBTENIR L'URL SIGNADA DEL PDF
+        print(f"\nObtenant URL del PDF per publicació {pub_id}...")
+        resp = await page.evaluate(f"""
             async () => {{
-                const resp = await fetch('{api_url}', {{
+                const r = await fetch('https://www.ara.cat/api/front/archive/publication/{pub_id}', {{
                     credentials: 'include',
-                    headers: {{ 'Accept': 'application/json' }}
+                    headers: {{'Accept': 'application/json'}}
                 }});
-                return await resp.text();
+                return {{ status: r.status, body: await r.text() }};
             }}
         """)
-        print(f"Resposta API (primers 500 chars): {api_response[:500]}")
+        print(f"Status: {resp.get('status')}")
+        body = resp.get('body', '')
+        print(f"Body: {body[:500]}")
 
-        # Parsejar la resposta
-        try:
-            data = json.loads(api_response)
-        except:
-            # Buscar URL directament al text
-            match = re.search(r'https://aranx-data[^\s"\'<>]+\.pdf[^\s"\'<>]*', api_response)
-            if match:
-                pdf_url = match.group(0)
-            else:
-                raise Exception(f"No s'ha pogut parsejar la resposta: {api_response[:300]}")
-        else:
-            # Buscar l'URL del PDF a la resposta JSON
-            api_str = json.dumps(data)
-            match = re.search(r'https://aranx-data[^"\'<>\s]+\.pdf[^"\'<>\s]*', api_str)
-            if match:
-                pdf_url = match.group(0)
-            else:
-                print(f"Resposta completa: {api_str[:1000]}")
-                raise Exception("No s'ha trobat l'URL del PDF a la resposta de l'API.")
+        match = re.search(r'https://aranx-data[^"\'<>\s\\]+\.pdf[^"\'<>\s\\]*', body)
+        if not match:
+            match = re.search(r'https://[^"\'<>\s\\]+amazonaws[^"\'<>\s\\]+\.pdf[^"\'<>\s\\]*', body)
+        if not match:
+            raise Exception(f"No s'ha trobat l'URL del PDF. Body: {body[:500]}")
 
+        pdf_url = match.group(0).replace('\\/', '/')
         print(f"URL del PDF: {pdf_url[:80]}...")
 
         # 5. DESCARREGAR EL PDF
         import urllib.request
-        fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{date.today()}.pdf")
+        fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{avui}.pdf")
         req = urllib.request.Request(pdf_url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req) as response:
             with open(fitxer_pdf, "wb") as f:
