@@ -98,22 +98,25 @@ async def descarrega_pdf():
         import urllib.error
 
         def api_get(url):
-            import gzip
+            import gzip, zlib
             req = urllib.request.Request(url, headers={
                 "User-Agent": USER_AGENT,
                 "Cookie": cookie_header,
                 "Accept": "application/json",
-                "Accept-Encoding": "gzip, deflate",
+                "Accept-Encoding": "identity",
                 "Referer": "https://www.ara.cat/hemeroteca/",
             })
             with urllib.request.urlopen(req, timeout=15) as resp:
                 raw = resp.read()
-                if resp.info().get("Content-Encoding") == "gzip":
+                encoding = resp.info().get("Content-Encoding", "")
+                if encoding == "gzip":
                     raw = gzip.decompress(raw)
-                try:
-                    return raw.decode("utf-8")
-                except:
-                    return gzip.decompress(raw).decode("utf-8")
+                elif encoding == "deflate":
+                    try:
+                        raw = zlib.decompress(raw)
+                    except:
+                        raw = zlib.decompress(raw, -15)
+                return raw.decode("utf-8", errors="replace")
 
         # Obtenir l'ID de la publicació més recent
         print("Obtenint ID de la publicació...")
