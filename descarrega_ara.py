@@ -3,6 +3,9 @@ import asyncio
 import smtplib
 import re
 import json
+import gzip
+import zlib
+import urllib.request
 from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -88,17 +91,12 @@ async def descarrega_pdf():
             if "login" in page.url:
                 raise Exception("El login no ha funcionat.")
 
-        # 3. OBTENIR LES COOKIES DE SESSIÓ
+        # 3. OBTENIR COOKIES
         cookies = await context.cookies()
         cookie_header = "; ".join([f"{c['name']}={c['value']}" for c in cookies if "ara.cat" in c.get("domain", "")])
-        print(f"Cookies obtingudes: {len([c for c in cookies if 'ara.cat' in c.get('domain','')])} cookies d'ara.cat")
+        print(f"Cookies: {len([c for c in cookies if 'ara.cat' in c.get('domain','')])} cookies d'ara.cat")
 
-        # 4. CRIDAR LES APIs DES DE PYTHON amb les cookies
-        import urllib.request
-        import urllib.error
-
-        def api_get(url):
-            import gzip, zlib
+        def api_get_text(url):
             req = urllib.request.Request(url, headers={
                 "User-Agent": USER_AGENT,
                 "Cookie": cookie_header,
@@ -107,49 +105,40 @@ async def descarrega_pdf():
                 "Referer": "https://www.ara.cat/hemeroteca/",
             })
             with urllib.request.urlopen(req, timeout=15) as resp:
-                raw = resp.read()
-                encoding = resp.info().get("Content-Encoding", "")
-                if encoding == "gzip":
-                    raw = gzip.decompress(raw)
-                elif encoding == "deflate":
-                    try:
-                        raw = zlib.decompress(raw)
-                    except:
-                        raw = zlib.decompress(raw, -15)
-                return raw.decode("utf-8", errors="replace")
+                return resp.read().decode("utf-8", errors="replace")
 
-        # Obtenir l'ID de la publicació més recent
+        def api_get_binary(url):
+            req = urllib.request.Request(url, headers={
+                "User-Agent": USER_AGENT,
+                "Cookie": cookie_header,
+                "Accept": "application/pdf,*/*",
+                "Accept-Encoding": "identity",
+                "Referer": "https://www.ara.cat/hemeroteca/",
+            })
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read()
+
+        # 4. OBTENIR ID DE PUBLICACIÓ
         print("Obtenint ID de la publicació...")
-        body = api_get("https://www.ara.cat/api/front/archive/publications?limit=1")
-        print(f"Resposta publications: {body[:300]}")
-
+        body = api_get_text("https://www.ara.cat/api/front/archive/publications?limit=1")
         pub_ids = re.findall(r'"id"\s*:\s*(\d+)', body)
         if not pub_ids:
             raise Exception("No s'ha trobat l'ID de publicació.")
         pub_id = pub_ids[0]
         print(f"ID de publicació: {pub_id}")
 
-        # 5. OBTENIR L'URL SIGNADA DEL PDF
-        print(f"Obtenint URL del PDF...")
-        body2 = api_get(f"https://www.ara.cat/api/front/archive/publication/{pub_id}")
-        print(f"Resposta publication: {body2[:500]}")
+        # 5. DESCARREGAR EL PDF DIRECTAMENT (l'API retorna el binari!)
+        print(f"Descarregant PDF directament...")
+        pdf_data = api_get_binary(f"https://www.ara.cat/api/front/archive/publication/{pub_id}")
+        print(f"Bytes rebuts: {len(pdf_data)} — Inici: {pdf_data[:10]}")
 
-        match = re.search(r'https://aranx-data[^"\'<>\s\\]+\.pdf[^"\'<>\s\\]*', body2)
-        if not match:
-            match = re.search(r'https://[^"\'<>\s\\]*amazonaws[^"\'<>\s\\]*\.pdf[^"\'<>\s\\]*', body2)
-        if not match:
-            raise Exception(f"No s'ha trobat l'URL del PDF. Body: {body2[:500]}")
+        if not pdf_data.startswith(b'%PDF'):
+            raise Exception(f"La resposta no és un PDF: {pdf_data[:100]}")
 
-        pdf_url = match.group(0).replace("\\/", "/")
-        print(f"URL del PDF: {pdf_url[:80]}...")
-
-        # 6. DESCARREGAR EL PDF
         avui = date.today()
         fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{avui}.pdf")
-        req = urllib.request.Request(pdf_url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=60) as response:
-            with open(fitxer_pdf, "wb") as f:
-                f.write(response.read())
+        with open(fitxer_pdf, "wb") as f:
+            f.write(pdf_data)
 
         await browser.close()
         mida = os.path.getsize(fitxer_pdf)
