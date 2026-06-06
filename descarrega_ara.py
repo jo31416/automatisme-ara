@@ -28,32 +28,38 @@ async def descarrega_pdf():
         )
         page = await context.new_page()
 
-        # 1. LOGIN
-        print("Carregant pàgina de login...")
-        await page.goto("https://perfil.ara.cat/login", timeout=60000)
+        # 1. LOGIN — anar a l'hemeroteca directament, que redirigirà al login
+        print("Carregant pàgina de l'hemeroteca (provocarà redirect al login)...")
+        await page.goto("https://www.ara.cat/hemeroteca/", timeout=60000)
+        await asyncio.sleep(3)
+        print(f"URL actual: {page.url}")
+
+        # Si no ha redirigit al login, anar-hi manualment
+        if "login" not in page.url and "perfil" not in page.url:
+            print("No ha redirigit, anant a perfil.ara.cat...")
+            await page.goto("https://perfil.ara.cat/", timeout=60000)
+            await asyncio.sleep(3)
+            print(f"URL actual: {page.url}")
 
         # Acceptar cookies
         try:
-            await page.wait_for_selector("button:has-text('Acceptar')", timeout=8000)
+            await page.wait_for_selector("button:has-text('Acceptar')", timeout=6000)
             await page.click("button:has-text('Acceptar')")
             await asyncio.sleep(1)
         except:
             pass
 
-        # Esperar que aparegui algun input (fins a 30 segons)
-        print("Esperant que carregui el formulari...")
+        # Esperar inputs
+        print("Esperant formulari de login...")
         try:
-            await page.wait_for_selector("input", timeout=30000)
+            await page.wait_for_selector("input", timeout=15000)
         except:
-            print("Timeout esperant inputs — fent screenshot")
-            await page.screenshot(path="/tmp/login_page.png")
-            # Mostrar el HTML per diagnòstic
+            print(f"No hi ha inputs. URL: {page.url}")
             html = await page.content()
-            print("HTML (primers 3000 chars):")
-            print(html[:3000])
-            raise Exception("El formulari de login no ha carregat.")
+            print("HTML (primers 1500 chars):")
+            print(html[:1500])
+            raise Exception("No s'ha trobat el formulari de login.")
 
-        # Diagnòstic
         inputs = await page.query_selector_all("input")
         print(f"Inputs trobats: {len(inputs)}")
         for inp in inputs:
@@ -63,31 +69,46 @@ async def descarrega_pdf():
             pl = await inp.get_attribute("placeholder") or ""
             print(f"  input type='{t}' name='{n}' id='{i}' placeholder='{pl}'")
 
-        # Omplir formulari
-        print("Omplint formulari...")
-        await inputs[0].fill(ARA_USUARI)
-        await inputs[1].fill(ARA_PASSWORD)
+        # Omplir email i password
+        email_filled = False
+        pass_filled = False
+        for inp in inputs:
+            t = await inp.get_attribute("type") or ""
+            n = (await inp.get_attribute("name") or "").lower()
+            i = (await inp.get_attribute("id") or "").lower()
+            if not email_filled and (t == "email" or "email" in n or "email" in i or "mail" in pl.lower()):
+                await inp.fill(ARA_USUARI)
+                email_filled = True
+            elif not pass_filled and (t == "password" or "pass" in n or "pass" in i):
+                await inp.fill(ARA_PASSWORD)
+                pass_filled = True
 
-        buttons = await page.query_selector_all("button")
-        clicked = False
-        for btn in buttons:
-            t = await btn.get_attribute("type") or ""
-            txt = (await btn.inner_text()).strip()
-            print(f"  Botó: type='{t}' text='{txt}'")
-            if t == "submit" or any(x in txt.lower() for x in ["entra", "accede", "login", "iniciar", "accedir"]):
-                await btn.click()
-                clicked = True
+        if not email_filled:
+            await inputs[0].fill(ARA_USUARI)
+        if not pass_filled and len(inputs) > 1:
+            await inputs[1].fill(ARA_PASSWORD)
+
+        # Clicar submit
+        submitted = False
+        for selector in ["button[type='submit']", "input[type='submit']", "button:has-text('Entra')", "button:has-text('Accedeix')", "button:has-text('Iniciar')"]:
+            try:
+                await page.click(selector, timeout=3000)
+                submitted = True
+                print(f"Clicat: {selector}")
                 break
-        if not clicked and buttons:
-            await buttons[-1].click()
+            except:
+                pass
+        if not submitted:
+            await page.keyboard.press("Enter")
 
-        await asyncio.sleep(4)
+        await asyncio.sleep(5)
         print(f"URL després del login: {page.url}")
 
         # 2. ANAR A L'HEMEROTECA
         print("Anant a l'hemeroteca...")
         await page.goto("https://www.ara.cat/hemeroteca/", wait_until="networkidle", timeout=60000)
         await asyncio.sleep(5)
+        print(f"URL hemeroteca: {page.url}")
 
         # 3. BUSCAR L'ENLLAÇ AL PDF
         links = await page.query_selector_all("a")
@@ -102,7 +123,6 @@ async def descarrega_pdf():
                 pdf_url = href if href.startswith("http") else "https://www.ara.cat" + href
 
         if not pdf_url:
-            await page.screenshot(path="/tmp/hemeroteca.png")
             html = await page.content()
             print("HTML hemeroteca (primers 2000 chars):")
             print(html[:2000])
