@@ -25,39 +25,59 @@ async def descarrega_pdf():
         # 1. LOGIN
         print("Carregant pàgina de login...")
         await page.goto("https://perfil.ara.cat/login", wait_until="networkidle", timeout=60000)
-        await asyncio.sleep(3)
+        await asyncio.sleep(4)
 
-        # Acceptar cookies si apareix el banner
+        # Acceptar cookies
         try:
             await page.click("button:has-text('Acceptar')", timeout=5000)
             await asyncio.sleep(1)
         except:
             pass
 
-        # Diagnòstic: llistar tots els inputs de la pàgina
-        inputs = await page.query_selector_all("input")
-        print(f"Inputs trobats: {len(inputs)}")
-        for inp in inputs:
-            t = await inp.get_attribute("type") or ""
-            n = await inp.get_attribute("name") or ""
-            i = await inp.get_attribute("id") or ""
-            pl = await inp.get_attribute("placeholder") or ""
-            print(f"  input type='{t}' name='{n}' id='{i}' placeholder='{pl}'")
+        # Diagnòstic: llistar iframes
+        frames = page.frames
+        print(f"Frames trobats: {len(frames)}")
+        for i, frame in enumerate(frames):
+            print(f"  Frame {i}: url={frame.url}")
+            inputs = await frame.query_selector_all("input")
+            print(f"    Inputs: {len(inputs)}")
+            for inp in inputs:
+                t = await inp.get_attribute("type") or ""
+                n = await inp.get_attribute("name") or ""
+                i2 = await inp.get_attribute("id") or ""
+                pl = await inp.get_attribute("placeholder") or ""
+                print(f"      input type='{t}' name='{n}' id='{i2}' placeholder='{pl}'")
 
-        # Intentar login amb els selectors més genèrics possibles
-        print("Omplint formulari...")
-        await page.locator("input").nth(0).fill(ARA_USUARI)
-        await page.locator("input").nth(1).fill(ARA_PASSWORD)
+        # Buscar el frame que té inputs
+        login_frame = None
+        for frame in frames:
+            inputs = await frame.query_selector_all("input")
+            if len(inputs) >= 2:
+                login_frame = frame
+                print(f"Frame amb inputs trobat: {frame.url}")
+                break
 
-        # Buscar botó de submit
-        buttons = await page.query_selector_all("button")
-        print(f"Botons trobats: {len(buttons)}")
+        if login_frame is None:
+            print("No s'ha trobat cap frame amb inputs, usant pàgina principal")
+            login_frame = page
+
+        # Omplir formulari
+        print("Omplint formulari de login...")
+        inputs = await login_frame.query_selector_all("input")
+        await inputs[0].fill(ARA_USUARI)
+        await inputs[1].fill(ARA_PASSWORD)
+
+        # Clicar submit
+        await login_frame.query_selector("button[type='submit']")
+        buttons = await login_frame.query_selector_all("button")
         for btn in buttons:
             t = await btn.get_attribute("type") or ""
             txt = (await btn.inner_text()).strip()
-            print(f"  button type='{t}' text='{txt}'")
+            print(f"  Botó: type='{t}' text='{txt}'")
+            if t == "submit" or any(x in txt.lower() for x in ["entra", "accede", "login", "iniciar"]):
+                await btn.click()
+                break
 
-        await page.locator("button[type='submit']").click()
         await asyncio.sleep(4)
         print(f"URL després del login: {page.url}")
 
@@ -73,14 +93,14 @@ async def descarrega_pdf():
         for link in links:
             href = await link.get_attribute("href") or ""
             text = (await link.inner_text()).strip()[:60]
-            if any(x in href.lower() for x in ["pdf", "paper", "download", "edici"]):
+            if any(x in href.lower() for x in ["pdf", "paper", "download"]):
                 print(f"  [CANDIDAT] [{text}] -> {href}")
-            if "pdf" in href.lower():
+            if "pdf" in href.lower() and not pdf_url:
                 pdf_url = href if href.startswith("http") else "https://www.ara.cat" + href
 
         if not pdf_url:
             await page.screenshot(path="/tmp/hemeroteca.png")
-            raise Exception("No s'ha trobat cap URL de PDF. Revisa els logs.")
+            raise Exception("No s'ha trobat cap URL de PDF.")
 
         print(f"URL del PDF: {pdf_url}")
         import urllib.request
