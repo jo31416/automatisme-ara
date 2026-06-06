@@ -76,66 +76,56 @@ async def descarrega_pdf():
             await asyncio.sleep(4)
             print(f"URL pas 1: {page.url}")
 
-            # PAS 2: contrasenya — diagnòstic de botons
+            # PAS 2: contrasenya
             print("Esperant camp de contrasenya...")
             await page.wait_for_selector("input[type='password']", timeout=15000)
             await page.fill("input[type='password']", ARA_PASSWORD)
             await asyncio.sleep(1)
 
-            # Llistar tots els botons per saber quin clicar
-            buttons = await page.query_selector_all("button")
-            print(f"Botons trobats: {len(buttons)}")
-            for btn in buttons:
-                t = await btn.get_attribute("type") or ""
-                txt = (await btn.inner_text()).strip()
-                print(f"  button type='{t}' text='{txt}'")
-
-            # Clicar el primer botó submit, o l'últim botó si no n'hi ha
-            clicked = False
-            for btn in buttons:
-                t = await btn.get_attribute("type") or ""
-                txt = (await btn.inner_text()).strip().upper()
-                if t == "submit" or any(x in txt for x in ["ENTRA", "ACCEDEIX", "CONTINUA", "LOGIN", "INICIAR"]):
-                    await btn.click()
-                    print(f"Clicat botó: '{txt}'")
-                    clicked = True
-                    break
-            if not clicked:
-                print("Cap botó submit trobat, fent Enter...")
-                await page.keyboard.press("Enter")
+            # Clicar "INICIA SESSIÓ" (el botó real del pas 2)
+            print("Clicant INICIA SESSIÓ...")
+            await page.click("button:has-text('INICIA SESSIÓ')", timeout=5000)
 
             await asyncio.sleep(6)
             print(f"URL després login: {page.url}")
 
-            # Verificar si el login ha anat bé
             if "login" in page.url:
-                html = await page.content()
-                errors = re.findall(r'class="[^"]*error[^"]*"[^>]*>([^<]+)<', html)
-                print(f"Errors de login detectats: {errors}")
-                raise Exception("El login no ha funcionat, seguim a la pàgina de login.")
+                raise Exception("El login no ha funcionat.")
 
-            # Anar a l'hemeroteca
+            # Anar a l'hemeroteca i esperar que carregui el contingut dinàmic
             print("Anant a l'hemeroteca...")
             await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(5)
+
+        # Esperar que el contingut dinàmic (les edicions) carregui
+        print("Esperant contingut dinàmic de l'hemeroteca...")
+        await asyncio.sleep(10)
 
         # 3. BUSCAR EL PDF
         print(f"URL hemeroteca: {page.url}")
         html = await page.content()
 
+        # Buscar URLs de PDF al HTML
         pdf_urls = re.findall(r'https?://[^\s"\'<>]*\.pdf[^\s"\'<>]*', html, re.IGNORECASE)
         print(f"PDFs al HTML: {pdf_urls}")
 
+        # Buscar també URLs que continguin "paper" o "edicio" als atributs
+        paper_urls = re.findall(r'https?://[^\s"\'<>]*(?:paper|edicio|hemeroteca)[^\s"\'<>]*', html, re.IGNORECASE)
+        print(f"URLs paper/edicio: {paper_urls[:10]}")
+
+        # Buscar scripts que puguin contenir l'URL del PDF
+        script_pdfs = re.findall(r'"([^"]*\.pdf[^"]*)"', html, re.IGNORECASE)
+        print(f"PDFs en scripts: {script_pdfs}")
+
         if pdf_urls:
             pdf_url = pdf_urls[0]
+        elif script_pdfs:
+            pdf_url = script_pdfs[0]
+            if not pdf_url.startswith("http"):
+                pdf_url = "https://www.ara.cat" + pdf_url
         else:
-            links = await page.query_selector_all("a")
-            print(f"Total enllaços: {len(links)}")
-            for link in links:
-                href = await link.get_attribute("href") or ""
-                text = (await link.inner_text()).strip()[:60]
-                if href and href != "#":
-                    print(f"  [{text[:40]}] -> {href}")
+            # Mostrar els primers 3000 chars del HTML per diagnòstic
+            print("HTML hemeroteca (primers 3000 chars):")
+            print(html[:3000])
             raise Exception("No s'ha trobat el PDF.")
 
         # 4. DESCARREGAR
