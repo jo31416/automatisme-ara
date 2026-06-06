@@ -88,106 +88,55 @@ async def descarrega_pdf():
             if "login" in page.url:
                 raise Exception("El login no ha funcionat.")
 
-        # 3. CRIDAR L'API D'HEMEROTECA PER OBTENIR L'ID DE LA PUBLICACIÓ
-        # Provem diverses APIs possibles
-        avui = date.today()
-        data_str = avui.strftime("%Y/%m/%d")
-        print(f"Buscant publicació del {data_str}...")
+        # 3. OBTENIR LES COOKIES DE SESSIÓ
+        cookies = await context.cookies()
+        cookie_header = "; ".join([f"{c['name']}={c['value']}" for c in cookies if "ara.cat" in c.get("domain", "")])
+        print(f"Cookies obtingudes: {len([c for c in cookies if 'ara.cat' in c.get('domain','')])} cookies d'ara.cat")
 
-        # API d'hemeroteca que llista les edicions
-        apis_a_provar = [
-            "https://www.ara.cat/api/front/archive/publications?limit=1",
-            "https://www.ara.cat/api/front/archive/publications",
-            f"https://www.ara.cat/api/front/archive/publications?date={avui.strftime('%Y-%m-%d')}",
-            "https://www.ara.cat/api/front/hemeroteca",
-            "https://www.ara.cat/api/front/hemeroteca?limit=1",
-        ]
+        # 4. CRIDAR LES APIs DES DE PYTHON amb les cookies
+        import urllib.request
+        import urllib.error
 
-        pub_id = None
-        for api in apis_a_provar:
-            print(f"Provant: {api}")
-            resp = await page.evaluate(f"""
-                async () => {{
-                    try {{
-                        const r = await fetch('{api}', {{
-                            credentials: 'include',
-                            headers: {{'Accept': 'application/json'}}
-                        }});
-                        return {{ status: r.status, body: await r.text() }};
-                    }} catch(e) {{ return {{ error: e.toString() }} }}
-                }}
-            """)
-            print(f"  Status: {resp.get('status')} — Body: {str(resp.get('body',''))[:300]}")
+        def api_get(url):
+            req = urllib.request.Request(url, headers={
+                "User-Agent": USER_AGENT,
+                "Cookie": cookie_header,
+                "Accept": "application/json",
+                "Referer": "https://www.ara.cat/hemeroteca/",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.read().decode("utf-8")
 
-            body = resp.get('body', '')
-            # Buscar IDs numèrics associats a publicació
-            ids = re.findall(r'"id"\s*:\s*(\d+)', body)
-            pub_matches = re.findall(r'/publication/(\d+)', body)
-            if ids or pub_matches:
-                pub_id = (pub_matches or ids)[0]
-                print(f"  ID trobat: {pub_id}")
-                break
+        # Obtenir l'ID de la publicació més recent
+        print("Obtenint ID de la publicació...")
+        body = api_get("https://www.ara.cat/api/front/archive/publications?limit=1")
+        print(f"Resposta publications: {body[:300]}")
 
-        if not pub_id:
-            # Intentar capturar l'ID interceptant peticions mentre naveguem
-            print("\nInterceptant peticions a l'API mentre carreguem l'hemeroteca...")
-            ids_capturats = []
+        pub_ids = re.findall(r'"id"\s*:\s*(\d+)', body)
+        if not pub_ids:
+            raise Exception("No s'ha trobat l'ID de publicació.")
+        pub_id = pub_ids[0]
+        print(f"ID de publicació: {pub_id}")
 
-            async def on_response(response):
-                url = response.url
-                if "/api/front/archive/publication" in url or "/api/front/hemeroteca" in url:
-                    print(f"  [API RESPONSE] {url}")
-                    try:
-                        body = await response.text()
-                        print(f"  Body: {body[:300]}")
-                        ids_capturats.append((url, body))
-                    except:
-                        pass
+        # 5. OBTENIR L'URL SIGNADA DEL PDF
+        print(f"Obtenint URL del PDF...")
+        body2 = api_get(f"https://www.ara.cat/api/front/archive/publication/{pub_id}")
+        print(f"Resposta publication: {body2[:500]}")
 
-            page.on("response", on_response)
-            await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(15)
-
-            for url, body in ids_capturats:
-                m = re.search(r'"id"\s*:\s*(\d+)', body)
-                pm = re.search(r'/publication/(\d+)', url)
-                if m or pm:
-                    pub_id = (pm.group(1) if pm else m.group(1))
-                    print(f"ID capturat: {pub_id}")
-                    break
-
-        if not pub_id:
-            raise Exception("No s'ha pogut trobar l'ID de publicació per cap mètode.")
-
-        # 4. OBTENIR L'URL SIGNADA DEL PDF
-        print(f"\nObtenant URL del PDF per publicació {pub_id}...")
-        resp = await page.evaluate(f"""
-            async () => {{
-                const r = await fetch('https://www.ara.cat/api/front/archive/publication/{pub_id}', {{
-                    credentials: 'include',
-                    headers: {{'Accept': 'application/json'}}
-                }});
-                return {{ status: r.status, body: await r.text() }};
-            }}
-        """)
-        print(f"Status: {resp.get('status')}")
-        body = resp.get('body', '')
-        print(f"Body: {body[:500]}")
-
-        match = re.search(r'https://aranx-data[^"\'<>\s\\]+\.pdf[^"\'<>\s\\]*', body)
+        match = re.search(r'https://aranx-data[^"\'<>\s\\]+\.pdf[^"\'<>\s\\]*', body2)
         if not match:
-            match = re.search(r'https://[^"\'<>\s\\]+amazonaws[^"\'<>\s\\]+\.pdf[^"\'<>\s\\]*', body)
+            match = re.search(r'https://[^"\'<>\s\\]*amazonaws[^"\'<>\s\\]*\.pdf[^"\'<>\s\\]*', body2)
         if not match:
-            raise Exception(f"No s'ha trobat l'URL del PDF. Body: {body[:500]}")
+            raise Exception(f"No s'ha trobat l'URL del PDF. Body: {body2[:500]}")
 
-        pdf_url = match.group(0).replace('\\/', '/')
+        pdf_url = match.group(0).replace("\\/", "/")
         print(f"URL del PDF: {pdf_url[:80]}...")
 
-        # 5. DESCARREGAR EL PDF
-        import urllib.request
+        # 6. DESCARREGAR EL PDF
+        avui = date.today()
         fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{avui}.pdf")
         req = urllib.request.Request(pdf_url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=60) as response:
             with open(fitxer_pdf, "wb") as f:
                 f.write(response.read())
 
