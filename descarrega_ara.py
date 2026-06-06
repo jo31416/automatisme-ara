@@ -15,68 +15,71 @@ ARA_USUARI     = os.environ["ARA_USUARI"]
 ARA_PASSWORD   = os.environ["ARA_PASSWORD"]
 CARPETA_DESAR  = "/tmp"
 
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
 
 async def descarrega_pdf():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(accept_downloads=True)
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            accept_downloads=True,
+            viewport={"width": 1280, "height": 800},
+        )
         page = await context.new_page()
 
         # 1. LOGIN
         print("Carregant pàgina de login...")
-        await page.goto("https://perfil.ara.cat/login", wait_until="networkidle", timeout=60000)
-        await asyncio.sleep(4)
+        await page.goto("https://perfil.ara.cat/login", timeout=60000)
 
         # Acceptar cookies
         try:
-            await page.click("button:has-text('Acceptar')", timeout=5000)
+            await page.wait_for_selector("button:has-text('Acceptar')", timeout=8000)
+            await page.click("button:has-text('Acceptar')")
             await asyncio.sleep(1)
         except:
             pass
 
-        # Diagnòstic: llistar iframes
-        frames = page.frames
-        print(f"Frames trobats: {len(frames)}")
-        for i, frame in enumerate(frames):
-            print(f"  Frame {i}: url={frame.url}")
-            inputs = await frame.query_selector_all("input")
-            print(f"    Inputs: {len(inputs)}")
-            for inp in inputs:
-                t = await inp.get_attribute("type") or ""
-                n = await inp.get_attribute("name") or ""
-                i2 = await inp.get_attribute("id") or ""
-                pl = await inp.get_attribute("placeholder") or ""
-                print(f"      input type='{t}' name='{n}' id='{i2}' placeholder='{pl}'")
+        # Esperar que aparegui algun input (fins a 30 segons)
+        print("Esperant que carregui el formulari...")
+        try:
+            await page.wait_for_selector("input", timeout=30000)
+        except:
+            print("Timeout esperant inputs — fent screenshot")
+            await page.screenshot(path="/tmp/login_page.png")
+            # Mostrar el HTML per diagnòstic
+            html = await page.content()
+            print("HTML (primers 3000 chars):")
+            print(html[:3000])
+            raise Exception("El formulari de login no ha carregat.")
 
-        # Buscar el frame que té inputs
-        login_frame = None
-        for frame in frames:
-            inputs = await frame.query_selector_all("input")
-            if len(inputs) >= 2:
-                login_frame = frame
-                print(f"Frame amb inputs trobat: {frame.url}")
-                break
-
-        if login_frame is None:
-            print("No s'ha trobat cap frame amb inputs, usant pàgina principal")
-            login_frame = page
+        # Diagnòstic
+        inputs = await page.query_selector_all("input")
+        print(f"Inputs trobats: {len(inputs)}")
+        for inp in inputs:
+            t = await inp.get_attribute("type") or ""
+            n = await inp.get_attribute("name") or ""
+            i = await inp.get_attribute("id") or ""
+            pl = await inp.get_attribute("placeholder") or ""
+            print(f"  input type='{t}' name='{n}' id='{i}' placeholder='{pl}'")
 
         # Omplir formulari
-        print("Omplint formulari de login...")
-        inputs = await login_frame.query_selector_all("input")
+        print("Omplint formulari...")
         await inputs[0].fill(ARA_USUARI)
         await inputs[1].fill(ARA_PASSWORD)
 
-        # Clicar submit
-        await login_frame.query_selector("button[type='submit']")
-        buttons = await login_frame.query_selector_all("button")
+        buttons = await page.query_selector_all("button")
+        clicked = False
         for btn in buttons:
             t = await btn.get_attribute("type") or ""
             txt = (await btn.inner_text()).strip()
             print(f"  Botó: type='{t}' text='{txt}'")
-            if t == "submit" or any(x in txt.lower() for x in ["entra", "accede", "login", "iniciar"]):
+            if t == "submit" or any(x in txt.lower() for x in ["entra", "accede", "login", "iniciar", "accedir"]):
                 await btn.click()
+                clicked = True
                 break
+        if not clicked and buttons:
+            await buttons[-1].click()
 
         await asyncio.sleep(4)
         print(f"URL després del login: {page.url}")
@@ -100,6 +103,9 @@ async def descarrega_pdf():
 
         if not pdf_url:
             await page.screenshot(path="/tmp/hemeroteca.png")
+            html = await page.content()
+            print("HTML hemeroteca (primers 2000 chars):")
+            print(html[:2000])
             raise Exception("No s'ha trobat cap URL de PDF.")
 
         print(f"URL del PDF: {pdf_url}")
