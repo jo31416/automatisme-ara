@@ -2,6 +2,7 @@ import os
 import asyncio
 import smtplib
 import re
+import json
 from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -90,46 +91,129 @@ async def descarrega_pdf():
             print("Anant a l'hemeroteca...")
             await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
 
-        # Esperar contingut dinàmic
-        print("Esperant contingut dinàmic (15s)...")
-        await asyncio.sleep(15)
+        await asyncio.sleep(10)
 
-        # DIAGNÒSTIC: Guardar el HTML complet
+        # 3. INTERCEPTAR LA CRIDA A L'API DE PUBLICACIÓ
+        print("Buscant l'ID de la publicació al HTML...")
         html = await page.content()
-        with open("/tmp/hemeroteca_full.html", "w", encoding="utf-8") as f:
-            f.write(html)
-        print(f"HTML complet desat ({len(html)} chars)")
 
-        # Buscar totes les URLs que continguin "static" o "ara.cat" al HTML
-        all_urls = re.findall(r'https?://[^\s"\'<>]+', html)
-        ara_urls = [u for u in all_urls if "static" in u and "ara.cat" in u]
-        print(f"\nURLs de static.ara.cat al HTML ({len(ara_urls)}):")
-        for u in set(ara_urls):
-            print(f"  {u}")
+        # Buscar IDs de publicació al HTML
+        pub_ids = re.findall(r'/api/front/archive/publication/(\d+)', html)
+        print(f"IDs de publicació trobats al HTML: {pub_ids}")
 
-        # Buscar tots els atributs href i onclick
-        hrefs = re.findall(r'href=["\']([^"\']+)["\']', html)
-        print(f"\nTots els hrefs ({len(hrefs)}):")
-        for h in hrefs:
-            if h != "#" and "javascript" not in h and len(h) > 5:
-                print(f"  {h}")
+        if not pub_ids:
+            # Interceptar la crida mentre es fa clic a la portada
+            print("No trobat al HTML, interceptant via clic...")
+            pub_ids_xarxa = []
 
-        # Buscar onclick que puguin contenir URLs
-        onclicks = re.findall(r'onclick=["\']([^"\']+)["\']', html)
-        print(f"\nOnclicks: {onclicks[:20]}")
+            async def on_request(request):
+                url = request.url
+                m = re.search(r'/api/front/archive/publication/(\d+)', url)
+                if m:
+                    print(f"  [API] {url}")
+                    pub_ids_xarxa.append(m.group(1))
 
-        # Buscar data-attributes
-        data_attrs = re.findall(r'data-[a-z-]+=["\']([^"\']*(?:pdf|download|paper)[^"\']*)["\']', html, re.IGNORECASE)
-        print(f"\nData attrs amb pdf/download/paper: {data_attrs}")
+            page.on("request", on_request)
 
-        raise Exception("Mode diagnòstic — revisa els logs per trobar l'URL del PDF")
+            try:
+                await page.click("a:has(img[src*='clip'])", timeout=15000)
+                await asyncio.sleep(5)
+            except Exception as e:
+                print(f"Error clic: {e}")
+
+            pub_ids = pub_ids_xarxa
+
+        if not pub_ids:
+            raise Exception("No s'ha trobat l'ID de publicació.")
+
+        pub_id = pub_ids[0]
+        print(f"ID de publicació: {pub_id}")
+
+        # 4. CRIDAR L'API PER OBTENIR L'URL SIGNADA DEL PDF
+        api_url = f"https://www.ara.cat/api/front/archive/publication/{pub_id}"
+        print(f"Cridant API: {api_url}")
+
+        api_response = await page.evaluate(f"""
+            async () => {{
+                const resp = await fetch('{api_url}', {{
+                    credentials: 'include',
+                    headers: {{ 'Accept': 'application/json' }}
+                }});
+                return await resp.text();
+            }}
+        """)
+        print(f"Resposta API (primers 500 chars): {api_response[:500]}")
+
+        # Parsejar la resposta
+        try:
+            data = json.loads(api_response)
+        except:
+            # Buscar URL directament al text
+            match = re.search(r'https://aranx-data[^\s"\'<>]+\.pdf[^\s"\'<>]*', api_response)
+            if match:
+                pdf_url = match.group(0)
+            else:
+                raise Exception(f"No s'ha pogut parsejar la resposta: {api_response[:300]}")
+        else:
+            # Buscar l'URL del PDF a la resposta JSON
+            api_str = json.dumps(data)
+            match = re.search(r'https://aranx-data[^"\'<>\s]+\.pdf[^"\'<>\s]*', api_str)
+            if match:
+                pdf_url = match.group(0)
+            else:
+                print(f"Resposta completa: {api_str[:1000]}")
+                raise Exception("No s'ha trobat l'URL del PDF a la resposta de l'API.")
+
+        print(f"URL del PDF: {pdf_url[:80]}...")
+
+        # 5. DESCARREGAR EL PDF
+        import urllib.request
+        fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{date.today()}.pdf")
+        req = urllib.request.Request(pdf_url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req) as response:
+            with open(fitxer_pdf, "wb") as f:
+                f.write(response.read())
+
+        await browser.close()
+        mida = os.path.getsize(fitxer_pdf)
+        print(f"PDF desat: {fitxer_pdf} ({mida:,} bytes)")
+        return fitxer_pdf
+
+
+def envia_email(fitxer_pdf):
+    avui = date.today().strftime("%d/%m/%Y")
+    assumpte = f"Diari Ara — {avui}"
+    cos = f"Bon dia,\n\nAdjunt trobaràs l'edició del diari Ara del {avui}.\n\nBona lectura!"
+
+    msg = MIMEMultipart()
+    msg["From"]    = GMAIL_USUARI
+    msg["To"]      = ", ".join(DESTINATARIS)
+    msg["Subject"] = assumpte
+    msg.attach(MIMEText(cos, "plain", "utf-8"))
+
+    with open(fitxer_pdf, "rb") as f:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(f.read())
+    encoders.encode_base64(part)
+    nom_fitxer = os.path.basename(fitxer_pdf)
+    part.add_header("Content-Disposition", f'attachment; filename="{nom_fitxer}"')
+    msg.attach(part)
+
+    print("Enviant email...")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as servidor:
+        servidor.login(GMAIL_USUARI, GMAIL_PASSWORD)
+        servidor.sendmail(GMAIL_USUARI, DESTINATARIS, msg.as_string())
+    print(f"Email enviat a: {', '.join(DESTINATARIS)}")
 
 
 if __name__ == "__main__":
     async def main():
-        await descarrega_pdf()
+        pdf = await descarrega_pdf()
+        envia_email(pdf)
+        print("✓ Tot completat correctament.")
 
     try:
         asyncio.run(main())
     except Exception as e:
-        print(f"Info: {e}")
+        print(f"✗ Error: {e}")
+        raise
