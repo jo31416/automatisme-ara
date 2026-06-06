@@ -36,27 +36,6 @@ async def descarrega_pdf():
         )
         page = await context.new_page()
 
-        # Interceptar totes les peticions de xarxa per trobar el PDF
-        pdf_urls_xarxa = []
-        api_urls = []
-
-        def on_request(request):
-            url = request.url
-            if ".pdf" in url.lower():
-                print(f"  [REQUEST PDF] {url}")
-                pdf_urls_xarxa.append(url)
-            if "hemeroteca" in url.lower() and ("api" in url.lower() or "json" in url.lower()):
-                print(f"  [REQUEST API] {url}")
-                api_urls.append(url)
-
-        def on_response(response):
-            url = response.url
-            if ".pdf" in url.lower():
-                print(f"  [RESPONSE PDF] {url}")
-
-        page.on("request", on_request)
-        page.on("response", on_response)
-
         # 1. COMPROVAR SESSIÓ
         print("Carregant hemeroteca...")
         await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
@@ -111,106 +90,46 @@ async def descarrega_pdf():
             print("Anant a l'hemeroteca...")
             await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
 
-        # Esperar contingut dinàmic i interceptar peticions
+        # Esperar contingut dinàmic
         print("Esperant contingut dinàmic (15s)...")
         await asyncio.sleep(15)
 
-        print(f"\nPDFs capturats per xarxa: {pdf_urls_xarxa}")
-        print(f"APIs capturades: {api_urls}")
+        # DIAGNÒSTIC: Guardar el HTML complet
+        html = await page.content()
+        with open("/tmp/hemeroteca_full.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"HTML complet desat ({len(html)} chars)")
 
-        # 3. BUSCAR EL PDF
-        pdf_url = None
+        # Buscar totes les URLs que continguin "static" o "ara.cat" al HTML
+        all_urls = re.findall(r'https?://[^\s"\'<>]+', html)
+        ara_urls = [u for u in all_urls if "static" in u and "ara.cat" in u]
+        print(f"\nURLs de static.ara.cat al HTML ({len(ara_urls)}):")
+        for u in set(ara_urls):
+            print(f"  {u}")
 
-        # Primer: PDFs interceptats per xarxa
-        if pdf_urls_xarxa:
-            pdf_url = pdf_urls_xarxa[0]
+        # Buscar tots els atributs href i onclick
+        hrefs = re.findall(r'href=["\']([^"\']+)["\']', html)
+        print(f"\nTots els hrefs ({len(hrefs)}):")
+        for h in hrefs:
+            if h != "#" and "javascript" not in h and len(h) > 5:
+                print(f"  {h}")
 
-        # Segon: buscar a les APIs capturades
-        if not pdf_url and api_urls:
-            import urllib.request
-            for api_url in api_urls:
-                try:
-                    req = urllib.request.Request(api_url, headers={"User-Agent": USER_AGENT})
-                    with urllib.request.urlopen(req) as resp:
-                        data = resp.read().decode("utf-8")
-                        pdf_match = re.search(r'https?://[^\s"\'<>]*\.pdf[^\s"\'<>]*', data)
-                        if pdf_match:
-                            pdf_url = pdf_match.group(0)
-                            print(f"PDF trobat a API: {pdf_url}")
-                            break
-                except:
-                    pass
+        # Buscar onclick que puguin contenir URLs
+        onclicks = re.findall(r'onclick=["\']([^"\']+)["\']', html)
+        print(f"\nOnclicks: {onclicks[:20]}")
 
-        # Tercer: buscar al HTML final
-        if not pdf_url:
-            html = await page.content()
-            pdf_match = re.search(r'https?://[^\s"\'<>]*\.pdf[^\s"\'<>]*', html, re.IGNORECASE)
-            if pdf_match:
-                pdf_url = pdf_match.group(0)
+        # Buscar data-attributes
+        data_attrs = re.findall(r'data-[a-z-]+=["\']([^"\']*(?:pdf|download|paper)[^"\']*)["\']', html, re.IGNORECASE)
+        print(f"\nData attrs amb pdf/download/paper: {data_attrs}")
 
-        if not pdf_url:
-            # Intentar clicar la imatge de portada i capturar la descàrrega
-            print("Intentant clicar la portada de l'última edició...")
-            try:
-                async with page.expect_download(timeout=15000) as dl:
-                    await page.click(".hemeroteca-paper a, .paper a, .edicio a, a:has(img[src*='clip'])", timeout=10000)
-                download = await dl.value
-                fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{date.today()}.pdf")
-                await download.save_as(fitxer_pdf)
-                await browser.close()
-                return fitxer_pdf
-            except Exception as e:
-                print(f"Error clic portada: {e}")
-                raise Exception("No s'ha trobut el PDF per cap mètode.")
-
-        # 4. DESCARREGAR
-        print(f"Descarregant: {pdf_url}")
-        import urllib.request
-        fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{date.today()}.pdf")
-        req = urllib.request.Request(pdf_url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req) as response:
-            with open(fitxer_pdf, "wb") as f:
-                f.write(response.read())
-
-        await browser.close()
-        print(f"PDF desat a: {fitxer_pdf}")
-        return fitxer_pdf
-
-
-def envia_email(fitxer_pdf):
-    avui = date.today().strftime("%d/%m/%Y")
-    assumpte = f"Diari Ara — {avui}"
-    cos = f"Bon dia,\n\nAdjunt trobaràs l'edició del diari Ara del {avui}.\n\nBona lectura!"
-
-    msg = MIMEMultipart()
-    msg["From"]    = GMAIL_USUARI
-    msg["To"]      = ", ".join(DESTINATARIS)
-    msg["Subject"] = assumpte
-    msg.attach(MIMEText(cos, "plain", "utf-8"))
-
-    with open(fitxer_pdf, "rb") as f:
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(f.read())
-    encoders.encode_base64(part)
-    nom_fitxer = os.path.basename(fitxer_pdf)
-    part.add_header("Content-Disposition", f'attachment; filename="{nom_fitxer}"')
-    msg.attach(part)
-
-    print("Enviant email...")
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as servidor:
-        servidor.login(GMAIL_USUARI, GMAIL_PASSWORD)
-        servidor.sendmail(GMAIL_USUARI, DESTINATARIS, msg.as_string())
-    print(f"Email enviat a: {', '.join(DESTINATARIS)}")
+        raise Exception("Mode diagnòstic — revisa els logs per trobar l'URL del PDF")
 
 
 if __name__ == "__main__":
     async def main():
-        pdf = await descarrega_pdf()
-        envia_email(pdf)
-        print("✓ Tot completat correctament.")
+        await descarrega_pdf()
 
     try:
         asyncio.run(main())
     except Exception as e:
-        print(f"✗ Error: {e}")
-        raise
+        print(f"Info: {e}")
