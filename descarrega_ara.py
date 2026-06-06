@@ -36,6 +36,27 @@ async def descarrega_pdf():
         )
         page = await context.new_page()
 
+        # Interceptar totes les peticions de xarxa per trobar el PDF
+        pdf_urls_xarxa = []
+        api_urls = []
+
+        def on_request(request):
+            url = request.url
+            if ".pdf" in url.lower():
+                print(f"  [REQUEST PDF] {url}")
+                pdf_urls_xarxa.append(url)
+            if "hemeroteca" in url.lower() and ("api" in url.lower() or "json" in url.lower()):
+                print(f"  [REQUEST API] {url}")
+                api_urls.append(url)
+
+        def on_response(response):
+            url = response.url
+            if ".pdf" in url.lower():
+                print(f"  [RESPONSE PDF] {url}")
+
+        page.on("request", on_request)
+        page.on("response", on_response)
+
         # 1. COMPROVAR SESSIÓ
         print("Carregant hemeroteca...")
         await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
@@ -65,7 +86,6 @@ async def descarrega_pdf():
             except:
                 pass
 
-            # PAS 1: correu
             print("Omplint correu...")
             await page.wait_for_selector("input[type='email'], input[placeholder*='orreu']", timeout=15000)
             await page.fill("input[type='email'], input[placeholder*='orreu']", ARA_USUARI)
@@ -74,59 +94,74 @@ async def descarrega_pdf():
             print("Clicant 'ACCEDEIX AMB EL CORREU ELECTRÒNIC'...")
             await page.click("button:has-text('ACCEDEIX AMB EL CORREU')", timeout=10000)
             await asyncio.sleep(4)
-            print(f"URL pas 1: {page.url}")
 
-            # PAS 2: contrasenya
-            print("Esperant camp de contrasenya...")
+            print("Omplint contrasenya...")
             await page.wait_for_selector("input[type='password']", timeout=15000)
             await page.fill("input[type='password']", ARA_PASSWORD)
             await asyncio.sleep(1)
 
-            # Clicar "INICIA SESSIÓ" (el botó real del pas 2)
             print("Clicant INICIA SESSIÓ...")
             await page.click("button:has-text('INICIA SESSIÓ')", timeout=5000)
-
             await asyncio.sleep(6)
             print(f"URL després login: {page.url}")
 
             if "login" in page.url:
                 raise Exception("El login no ha funcionat.")
 
-            # Anar a l'hemeroteca i esperar que carregui el contingut dinàmic
             print("Anant a l'hemeroteca...")
             await page.goto("https://www.ara.cat/hemeroteca/", wait_until="domcontentloaded", timeout=60000)
 
-        # Esperar que el contingut dinàmic (les edicions) carregui
-        print("Esperant contingut dinàmic de l'hemeroteca...")
-        await asyncio.sleep(10)
+        # Esperar contingut dinàmic i interceptar peticions
+        print("Esperant contingut dinàmic (15s)...")
+        await asyncio.sleep(15)
+
+        print(f"\nPDFs capturats per xarxa: {pdf_urls_xarxa}")
+        print(f"APIs capturades: {api_urls}")
 
         # 3. BUSCAR EL PDF
-        print(f"URL hemeroteca: {page.url}")
-        html = await page.content()
+        pdf_url = None
 
-        # Buscar URLs de PDF al HTML
-        pdf_urls = re.findall(r'https?://[^\s"\'<>]*\.pdf[^\s"\'<>]*', html, re.IGNORECASE)
-        print(f"PDFs al HTML: {pdf_urls}")
+        # Primer: PDFs interceptats per xarxa
+        if pdf_urls_xarxa:
+            pdf_url = pdf_urls_xarxa[0]
 
-        # Buscar també URLs que continguin "paper" o "edicio" als atributs
-        paper_urls = re.findall(r'https?://[^\s"\'<>]*(?:paper|edicio|hemeroteca)[^\s"\'<>]*', html, re.IGNORECASE)
-        print(f"URLs paper/edicio: {paper_urls[:10]}")
+        # Segon: buscar a les APIs capturades
+        if not pdf_url and api_urls:
+            import urllib.request
+            for api_url in api_urls:
+                try:
+                    req = urllib.request.Request(api_url, headers={"User-Agent": USER_AGENT})
+                    with urllib.request.urlopen(req) as resp:
+                        data = resp.read().decode("utf-8")
+                        pdf_match = re.search(r'https?://[^\s"\'<>]*\.pdf[^\s"\'<>]*', data)
+                        if pdf_match:
+                            pdf_url = pdf_match.group(0)
+                            print(f"PDF trobat a API: {pdf_url}")
+                            break
+                except:
+                    pass
 
-        # Buscar scripts que puguin contenir l'URL del PDF
-        script_pdfs = re.findall(r'"([^"]*\.pdf[^"]*)"', html, re.IGNORECASE)
-        print(f"PDFs en scripts: {script_pdfs}")
+        # Tercer: buscar al HTML final
+        if not pdf_url:
+            html = await page.content()
+            pdf_match = re.search(r'https?://[^\s"\'<>]*\.pdf[^\s"\'<>]*', html, re.IGNORECASE)
+            if pdf_match:
+                pdf_url = pdf_match.group(0)
 
-        if pdf_urls:
-            pdf_url = pdf_urls[0]
-        elif script_pdfs:
-            pdf_url = script_pdfs[0]
-            if not pdf_url.startswith("http"):
-                pdf_url = "https://www.ara.cat" + pdf_url
-        else:
-            # Mostrar els primers 3000 chars del HTML per diagnòstic
-            print("HTML hemeroteca (primers 3000 chars):")
-            print(html[:3000])
-            raise Exception("No s'ha trobat el PDF.")
+        if not pdf_url:
+            # Intentar clicar la imatge de portada i capturar la descàrrega
+            print("Intentant clicar la portada de l'última edició...")
+            try:
+                async with page.expect_download(timeout=15000) as dl:
+                    await page.click(".hemeroteca-paper a, .paper a, .edicio a, a:has(img[src*='clip'])", timeout=10000)
+                download = await dl.value
+                fitxer_pdf = os.path.join(CARPETA_DESAR, f"ara_{date.today()}.pdf")
+                await download.save_as(fitxer_pdf)
+                await browser.close()
+                return fitxer_pdf
+            except Exception as e:
+                print(f"Error clic portada: {e}")
+                raise Exception("No s'ha trobut el PDF per cap mètode.")
 
         # 4. DESCARREGAR
         print(f"Descarregant: {pdf_url}")
