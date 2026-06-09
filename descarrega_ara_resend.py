@@ -155,7 +155,7 @@ def envia_email(fitxer_pdf):
     nom_fitxer = os.path.basename(fitxer_pdf)
 
     payload = json.dumps({
-        "from": f"Diari Ara <{GMAIL_USUARI}>",
+        "from": "Diari Ara <onboarding@resend.dev>",
         "to": DESTINATARIS,
         "subject": assumpte,
         "text": cos,
