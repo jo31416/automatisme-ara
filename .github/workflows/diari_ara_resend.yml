@@ -1,0 +1,34 @@
+name: Descarrega i envia el Diari Ara (Resend)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  descarrega-i-envia:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descarrega el codi
+        uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instal·la dependències
+        run: |
+          pip install playwright
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      - name: Executa l'script
+        env:
+          GMAIL_USUARI: ${{ secrets.GMAIL_USUARI }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DESTINATARIS: ${{ secrets.DESTINATARIS }}
+          ARA_USUARI: ${{ secrets.ARA_USUARI }}
+          ARA_PASSWORD: ${{ secrets.ARA_PASSWORD }}
+        run: python descarrega_ara_resend.py
