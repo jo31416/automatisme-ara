@@ -2,7 +2,7 @@ name: Descarrega i envia el Diari Ara
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 6 * * *'   # 8:00h hora catalana (UTC+2)
   workflow_dispatch:
 
 jobs:
@@ -23,20 +23,6 @@ jobs:
           pip install playwright
           python -m playwright install chromium
           python -m playwright install-deps chromium
-
-      - name: Verifica secrets
-        env:
-          ARA_USUARI: ${{ secrets.ARA_USUARI }}
-          ARA_PASSWORD: ${{ secrets.ARA_PASSWORD }}
-          GMAIL_USUARI: ${{ secrets.GMAIL_USUARI }}
-          GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
-          DESTINATARIS: ${{ secrets.DESTINATARIS }}
-        run: |
-          echo "ARA_USUARI buit?: $([ -z "$ARA_USUARI" ] && echo SI || echo NO)"
-          echo "ARA_PASSWORD buit?: $([ -z "$ARA_PASSWORD" ] && echo SI || echo NO)"
-          echo "GMAIL_USUARI buit?: $([ -z "$GMAIL_USUARI" ] && echo SI || echo NO)"
-          echo "GMAIL_PASSWORD buit?: $([ -z "$GMAIL_PASSWORD" ] && echo SI || echo NO)"
-          echo "DESTINATARIS buit?: $([ -z "$DESTINATARIS" ] && echo SI || echo NO)"
 
       - name: Executa l'script
         env:
