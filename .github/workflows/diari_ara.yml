@@ -2,7 +2,7 @@ name: Descarrega i envia el Diari Ara
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # 8:00h hora catalana (UTC+2)
+    - cron: '0 8 * * *'   # 8:00h hora catalana (UTC+2)
   workflow_dispatch:
 
 jobs:
