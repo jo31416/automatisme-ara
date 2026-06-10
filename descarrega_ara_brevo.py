@@ -146,7 +146,7 @@ def envia_email(fitxer_pdf):
     cos = f"Bon dia,\n\nAdjunt trobaràs l'edició del diari Ara del {avui}.\n\nBona lectura!"
 
     msg = MIMEMultipart()
-    msg["From"]    = BREVO_SMTP_LOGIN
+    msg["From"]    = BREVO_FROM
     msg["To"]      = ", ".join(DESTINATARIS)
     msg["Subject"] = assumpte
     msg.attach(MIMEText(cos, "plain", "utf-8"))
@@ -163,7 +163,7 @@ def envia_email(fitxer_pdf):
     with smtplib.SMTP("smtp-relay.brevo.com", 587) as servidor:
         servidor.starttls()
         servidor.login(BREVO_SMTP_LOGIN, BREVO_SMTP_KEY)
-        servidor.sendmail(BREVO_SMTP_LOGIN, DESTINATARIS, msg.as_string())
+        servidor.sendmail(BREVO_FROM, DESTINATARIS, msg.as_string())
 
     print(f"Email enviat a: {', '.join(DESTINATARIS)}")
 
