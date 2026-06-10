@@ -2,17 +2,21 @@ import os
 import asyncio
 import re
 import json
-import base64
+import smtplib
 import urllib.request
 from datetime import date
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 from playwright.async_api import async_playwright
 
-GMAIL_USUARI   = os.environ["GMAIL_USUARI"]
-BREVO_API_KEY  = os.environ["BREVO_API_KEY"]
-DESTINATARIS   = os.environ["DESTINATARIS"].split(",")
-ARA_USUARI     = os.environ["ARA_USUARI"]
-ARA_PASSWORD   = os.environ["ARA_PASSWORD"]
-CARPETA_DESAR  = "/tmp"
+BREVO_SMTP_LOGIN = os.environ["BREVO_SMTP_LOGIN"]
+BREVO_SMTP_KEY   = os.environ["BREVO_SMTP_KEY"]
+DESTINATARIS     = os.environ["DESTINATARIS"].split(",")
+ARA_USUARI       = os.environ["ARA_USUARI"]
+ARA_PASSWORD     = os.environ["ARA_PASSWORD"]
+CARPETA_DESAR    = "/tmp"
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -117,7 +121,7 @@ async def descarrega_pdf():
         pub_id = pub_ids[0]
         print(f"ID de publicació: {pub_id}")
 
-        print(f"Descarregant PDF...")
+        print("Descarregant PDF...")
         pdf_data = api_get_binary(f"https://www.ara.cat/api/front/archive/publication/{pub_id}")
         print(f"Bytes rebuts: {len(pdf_data)} — Inici: {pdf_data[:10]}")
 
@@ -140,43 +144,25 @@ def envia_email(fitxer_pdf):
     assumpte = f"Diari Ara — {avui}"
     cos = f"Bon dia,\n\nAdjunt trobaràs l'edició del diari Ara del {avui}.\n\nBona lectura!"
 
+    msg = MIMEMultipart()
+    msg["From"]    = BREVO_SMTP_LOGIN
+    msg["To"]      = ", ".join(DESTINATARIS)
+    msg["Subject"] = assumpte
+    msg.attach(MIMEText(cos, "plain", "utf-8"))
+
     with open(fitxer_pdf, "rb") as f:
-        pdf_b64 = base64.b64encode(f.read()).decode()
-
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(f.read())
+    encoders.encode_base64(part)
     nom_fitxer = os.path.basename(fitxer_pdf)
+    part.add_header("Content-Disposition", f'attachment; filename="{nom_fitxer}"')
+    msg.attach(part)
 
-    payload = json.dumps({
-        "sender": {"name": "Diari Ara", "email": GMAIL_USUARI},
-        "to": [{"email": d.strip()} for d in DESTINATARIS],
-        "subject": assumpte,
-        "textContent": cos,
-        "attachment": [
-            {
-                "name": nom_fitxer,
-                "content": pdf_b64,
-            }
-        ]
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.brevo.com/v3/smtp/email",
-        data=payload,
-        headers={
-            "api-key": BREVO_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST"
-    )
-
-    print("Enviant email via Brevo...")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resposta = json.loads(resp.read().decode())
-            print(f"Brevo messageId: {resposta.get('messageId')}")
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
-        raise Exception(f"Error Brevo {e.code}: {error_body}")
+    print("Enviant email via Brevo SMTP...")
+    with smtplib.SMTP("smtp-relay.brevo.com", 587) as servidor:
+        servidor.starttls()
+        servidor.login(BREVO_SMTP_LOGIN, BREVO_SMTP_KEY)
+        servidor.sendmail(BREVO_SMTP_LOGIN, DESTINATARIS, msg.as_string())
 
     print(f"Email enviat a: {', '.join(DESTINATARIS)}")
 
