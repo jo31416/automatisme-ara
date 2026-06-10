@@ -27,6 +27,7 @@ jobs:
       - name: Executa l'script
         env:
           BREVO_SMTP_LOGIN: ${{ secrets.BREVO_SMTP_LOGIN }}
+          BREVO_FROM: ${{ secrets.BREVO_FROM }}
           BREVO_SMTP_KEY: ${{ secrets.BREVO_SMTP_KEY }}
           DESTINATARIS: ${{ secrets.DESTINATARIS }}
           ARA_USUARI: ${{ secrets.ARA_USUARI }}
