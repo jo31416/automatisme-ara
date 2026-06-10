@@ -12,6 +12,7 @@ from email import encoders
 from playwright.async_api import async_playwright
 
 BREVO_SMTP_LOGIN = os.environ["BREVO_SMTP_LOGIN"]
+BREVO_FROM       = os.environ["BREVO_FROM"]
 BREVO_SMTP_KEY   = os.environ["BREVO_SMTP_KEY"]
 DESTINATARIS     = os.environ["DESTINATARIS"].split(",")
 ARA_USUARI       = os.environ["ARA_USUARI"]
