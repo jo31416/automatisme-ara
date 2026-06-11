@@ -2,7 +2,7 @@ name: Descarrega i envia el Diari Ara (Brevo)
 
 on:
   schedule:
-    - cron: '/30 * * * *'
+    - cron: '05 * * * *'
   
 
 jobs:
