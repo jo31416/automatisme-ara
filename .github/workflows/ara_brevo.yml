@@ -1,0 +1,29 @@
+name: Diari Ara
+
+on:
+  schedule:
+    - cron: '15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  envia:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Instal·la dependències
+        run: |
+          pip install playwright
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+      - name: Executa
+        env:
+          BREVO_SMTP_LOGIN: ${{ secrets.BREVO_SMTP_LOGIN }}
+          BREVO_FROM: ${{ secrets.BREVO_FROM }}
+          BREVO_SMTP_KEY: ${{ secrets.BREVO_SMTP_KEY }}
+          DESTINATARIS: ${{ secrets.DESTINATARIS }}
+          ARA_USUARI: ${{ secrets.ARA_USUARI }}
+          ARA_PASSWORD: ${{ secrets.ARA_PASSWORD }}
+        run: python descarrega_ara_brevo.py
