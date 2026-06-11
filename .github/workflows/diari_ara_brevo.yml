@@ -3,8 +3,6 @@ name: Descarrega i envia el Diari Ara (Brevo)
 on:
   schedule:
     - cron: '15 * * * *'
-  
-
 jobs:
   descarrega-i-envia:
     runs-on: ubuntu-latest
