@@ -2,8 +2,8 @@ name: Descarrega i envia el Diari Ara (Brevo)
 
 on:
   schedule:
-    - cron: '0 15 * * *'
-  workflow_dispatch:
+    - cron: '0 18 * * *'
+  
 
 jobs:
   descarrega-i-envia:
