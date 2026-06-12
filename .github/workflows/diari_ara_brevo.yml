@@ -3,6 +3,7 @@ name: Descarrega i envia el Diari Ara (Brevo)
 on:
   schedule:
     - cron: '5 5 * * *'
+  workflow_dispatch:
 jobs:
   descarrega-i-envia:
     runs-on: ubuntu-latest
