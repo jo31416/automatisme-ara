@@ -5,3 +5,4 @@ Resync scheduled workflows
 revi copilot
 provo cron cada 15m traient la exec manual
 trec espais en blanc
+deixo cron a les 7.5 
