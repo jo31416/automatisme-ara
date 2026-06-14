@@ -115,12 +115,19 @@ async def descarrega_pdf():
                 return resp.read()
 
         print("Obtenint ID de la publicació...")
-        body = api_get_text("https://www.ara.cat/api/front/archive/publications?limit=1")
-        pub_ids = re.findall(r'"id"\s*:\s*(\d+)', body)
-        if not pub_ids:
-            raise Exception("No s'ha trobat l'ID de publicació.")
-        pub_id = pub_ids[0]
-        print(f"ID de publicació: {pub_id}")
+        body = api_get_text("https://www.ara.cat/api/front/archive/publications?limit=5")
+        data_json = json.loads(body)
+        items = data_json["response"]["items"]
+
+        pub_id = None
+        for item in items:
+            if item.get("type", {}).get("value") == "ara":
+                pub_id = item["id"]
+                print(f"Publicació principal trobada: {item['pdf']['filename']} (id={pub_id})")
+                break
+
+        if pub_id is None:
+            raise Exception("No s'ha trobat cap publicació de tipus 'ara'.")
 
         print("Descarregant PDF...")
         pdf_data = api_get_binary(f"https://www.ara.cat/api/front/archive/publication/{pub_id}")
