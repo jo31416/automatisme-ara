@@ -29,4 +29,4 @@ jobs:
           DESTINATARIS: ${{ secrets.DESTINATARIS }}
           ARA_USUARI: ${{ secrets.ARA_USUARI }}
           ARA_PASSWORD: ${{ secrets.ARA_PASSWORD }}
-        run: python descarrega_ara_brevo.py
+        run: python descarrega_ara_brevo_v202608.py
